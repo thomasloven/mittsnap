@@ -26,8 +26,6 @@ BACKUP_ROOT=/backup
 
 # Additional arguments to RSYNC
 # RSYNC_ARGUMENTS=""
-RSYNC_ARGUMENTS="
-"
 
 # Sources to backup from
 # A list of <protocol> <source> <target>

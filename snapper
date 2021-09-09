@@ -129,6 +129,8 @@ setup_backup() {
     local index=$1
     local dir=${BACKUP_ROOT}/${index}
 
+    info "Preparing directory for ${index}."
+
     if [[ -d ${dir} ]]; then
         critical "${dir} already exists. Aborting"
         exit 1
@@ -235,6 +237,10 @@ make_backup_daily() {
     info "Making a new daily backup"
 
     local dstdir=${BACKUP_ROOT}/daily.0/
+
+    if [[ ! -d ${dstdir} ]]; then
+        setup_backup daily.0
+    fi
 
     while IFS= read -r source; do
         if [[ -z "$source" ]]; then
