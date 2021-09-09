@@ -89,23 +89,35 @@ make_local_copy() {
     local src=${1}
     local dst=${2}
 
+    local progress=""
+    if (( $VERBOSITY >= $dbg_lvl )); then
+        progress="--progress"
+    fi
+
     local cmd="/usr/bin/rsync \
     -a --delete --numeric-ids --relative --delete-excluded \
+    ${progress} \
     ${RSYNC_ARGUMENTS-} \
     ${src} ${dst}"
 
-    runcmd "${cmd}"
+    runcmd "${cmd//$'\n'/' '}"
 }
 make_ssh_copy() {
     local src=${1}
     local dst=${2}
 
+    local progress=""
+    if (( $VERBOSITY >= $dbg_lvl )); then
+        progress="--progress"
+    fi
+
     local cmd="/usr/bin/rsync \
     -a --delete --numeric-ids --relative --delete-excluded \
+    ${progress} \
     ${RSYNC_ARGUMENTS-} \
     --rsh='/usr/bin/ssh -o BatchMode=yes' \
     ${src} ${dst}"
-    runcmd "${cmd}"
+    runcmd "${cmd//$'\n'/' '}"
 }
 
 ##################################################################
