@@ -9,6 +9,7 @@ DRYRUN=1
 CONFIG="./config.sh"
 
 exec 3>&2
+exec 4>&2
 readonly silent_lvl=0
 readonly crt_lvl=1
 readonly err_lvl=2
@@ -25,8 +26,12 @@ debug() { log $dbg_lvl "DEBUG: $1"; }
 log() {
     if (( $VERBOSITY >= $1 )); then
         datestring=$(date +'%Y-%m-%d %H:%M:%S')
-        echo "[$datestring] $2" | fold -w70 -s | sed '2~1s/^/  /' >&3
+        echo "[$datestring] $2" | fold -w80 -s | sed '2~1s/^/  /' >&3
     fi
+}
+command_log() {
+    datestring=$(date +'%Y-%m-%d %H:%M:%S')
+    echo "[$datestring] $1" >&4
 }
 
 usage() {
@@ -40,9 +45,232 @@ usage() {
     echo "  -l FILE : redirect log output to FILE"
 }
 
+runcmd() {
+    debug "Running $@"
+    command_log "$@"
+    if [[ $DRYRUN == 0 ]]; then
+        if (( $VERBOSITY >= $dbg_lvl )); then
+            eval "$@" >&3
+        else
+            eval "$@" >/dev/null
+        fi
+    fi
+}
+
+get_count() {
+    local level=$1
+
+    case ${level} in
+        "daily") echo "${KEEP_DAILY-7}" ;;
+        "weekly") echo "${KEEP_WEEKLY-5}" ;;
+        "monthly") echo "${KEEP_MONTHLY-12}" ;;
+        "yearly") echo "${KEEP_YEARLY-100}" ;;
+        *) return 1 ;;
+    esac
+}
+
+is_subvolume() {
+    if [[ $(stat -f --format=%T ${1}) != "btrfs" ]]; then
+        return 1
+    fi
+    if [[ $(stat --format=%i ${1}) != 256 ]]; then
+        return 1
+    fi
+    return 0
+}
+make_snapshot() {
+    local src=$1
+    local dst=$2
+
+    runcmd "btrfs subvolume snapshot -r ${src} ${dst}" \
+        || error "Snapshot of ${src} to ${dst} failed"
+}
+make_local_copy() {
+    local src=${1}
+    local dst=${2}
+
+    local cmd="/usr/bin/rsync \
+    -a --delete --numeric-ids --relative --delete-excluded \
+    ${RSYNC_ARGUMENTS-} \
+    ${src} ${dst}"
+
+    runcmd "${cmd}"
+}
+make_ssh_copy() {
+    local src=${1}
+    local dst=${2}
+
+    local cmd="/usr/bin/rsync \
+    -a --delete --numeric-ids --relative --delete-excluded \
+    ${RSYNC_ARGUMENTS-} \
+    --rsh='/usr/bin/ssh -o BatchMode=yes' \
+    ${src} ${dst}"
+    runcmd "${cmd}"
+}
+
+copy_backup() {
+    local src=$1
+    local dst=$2
+
+    runcmd "mkdir -p ${dst}"
+    for f in ${src}/*; do
+        if ! is_subvolume ${f}; then
+            critical "${f} is not a btrfs subvolume. Archive corrupted?"
+            exit 1
+        fi
+        target=${dst}${f#${src}}
+        make_snapshot "${f}" "${target}"
+    done
+}
+rotate_backups() {
+    local level=$1
+
+    local count=$(get_count "$level")
+
+    info "Rotating ${level} backups"
+
+    for (( i=${count}; i>= 0; i-- )); do
+        local src=${BACKUP_ROOT}/${level}.${i}
+        local dst=${BACKUP_ROOT}/${level}.$((${i}+1))
+
+        if [[ -d ${src} ]]; then
+            if ((i == 0)) && [[ $level == "daily" ]]; then
+                copy_backup ${src} ${dst}
+            else
+                runcmd "mv ${src}/ ${dst}"
+            fi
+        fi
+    done
+}
+
+prune_backups() {
+    local level=$1
+    local count=$(get_count "$level")
+
+    local backup=${level}.$((${count}+1))
+    local prunedir=${BACKUP_ROOT}/${backup}
+
+    info "Pruning ${level}"
+    if [[ ! -d ${prunedir} ]]; then
+        debug "Backup ${backup} does not exist. No need to prune."
+        return 0
+    fi
+
+    debug "Pruning ${backup}"
+    for f in ${prunedir}/*; do
+        if ! is_subvolume ${f}; then
+            critical "${f} is not a btrfs subvolume. Archive corrupted?"
+            exit 1
+        fi
+        runcmd "btrfs subvolume delete ${f}"
+    done
+    runcmd "rmdir ${prunedir}"
+}
+
+make_backup_daily() {
+    info "Making a new daily backup"
+
+    local dstdir=${BACKUP_ROOT}/daily.0/
+
+    while IFS= read -r source; do
+        if [[ -z "$source" ]]; then
+            continue
+        fi
+        IFS=' ' read -ra l <<< $source
+        local protocol=${l[0]}
+        local src=${l[1]}
+        local dst=${l[2]}
+        debug "Protocol: ${protocol}, Source: ${src}, Destination: ${dst}"
+        case ${protocol} in
+            "snapshot")
+                if is_subvolume "${dstdir}${dst}"; then
+                    runcmd "btrfs subvolume delete ${dstdir}${dst}"
+                fi
+                make_snapshot "${src}" "${dstdir}${dst}"
+                ;;
+            "local")
+                make_local_copy ${src} ${dstdir}remote/${dst}
+                ;;
+            "ssh")
+                make_ssh_copy ${src} ${dstdir}remote/${dst}
+                ;;
+            *)
+                error "Unknown protocol: ${protocol} - ${source}"
+                ;;
+        esac
+    done <<< $SOURCES
+}
+
+make_backup_weekly() {
+    info "Making a new weekly backup"
+
+    local dst=${BACKUP_ROOT}/weekly.0
+    local srcbackup="daily.$(get_count daily)"
+    local src=${BACKUP_ROOT}/${srcbackup}
+
+    if [[ ! -d ${src} ]]; then
+        error "Backup ${srcbackup} does not exist. Cannot make weekly backup."
+        exit 1
+    fi
+    copy_backup ${src} ${dst}
+}
+
+make_backup_monthly() {
+    info "Making a new weekly backup"
+
+    local dst=${BACKUP_ROOT}/monthly.0
+    local srcbackup="weekly.$(get_count weekly)"
+    local src=${BACKUP_ROOT}/${srcbackup}
+
+    if [[ ! -d ${src} ]]; then
+        error "Backup ${srcbackup} does not exist. Cannot make monthly backup."
+        exit 1
+    fi
+    copy_backup ${src} ${dst}
+}
+
+make_backup() {
+    local level=$1
+
+    case ${level} in
+        "daily") make_backup_daily ;;
+        "weekly") make_backup_weekly ;;
+        "monthly") make_backup_monthly ;;
+        *) ;;
+    esac
+}
+
+remove_backup() {
+    local index=$1
+    local dir=${BACKUP_ROOT}/${index}
+
+    for f in ${dir}/*; do
+        if ! is_subvolume ${f}; then
+            critical "${f} is not a btrfs subvolume. Archive corrupted?"
+            exit 1
+        fi
+        runcmd "btrfs subvolume delete ${f}"
+    done
+    runcmd "rmdir ${dir}"
+}
+
+setup_backup() {
+    local dir=${BACKUP_ROOT}/daily.0
+
+    if [[ -d ${dir} ]]; then
+        critical "${dir} already exists. Aborting"
+        exit 1
+    fi
+
+    runcmd "mkdir -p ${dir}"
+    runcmd "btrfs subvolume create ${dir}/remote"
+}
+
+
+
 main() {
-    if [[ -z ${SNAPSHOT_ROOT-} ]]; then
-        critical "SNAPSHOT_ROOT undefined"
+    if [[ -z ${BACKUP_ROOT-} ]]; then
+        critical "BACKUP_ROOT undefined"
         exit 1
     fi
     if [[ -z ${SOURCES:-} ]]; then
@@ -50,14 +278,36 @@ main() {
         exit 1
     fi
 
-    local backuplevel=$1
+    local level=$1
 
-    info "Snapper starting $1 snapshot"
 
-    while IFS= read -r source; do
-        info "$source"
-    done <<< $SOURCES
 
+    if [[ $level == "remove" ]]; then
+        info "Removing backup ${2}"
+        remove_backup ${2}
+        exit 0
+    fi
+    if [[ $level == "setup" ]]; then
+        info "Snapper setting up in ${BACKUP_ROOT}"
+        setup_backup
+        exit 0
+    fi
+
+    if (( "$#" > 2 )); then
+    # TODO: For some reason this only prints the first argument
+    critical "Bad arguments: $@"
+    usage
+    exit 1
+fi
+
+    info "Snapper starting $level snapshot"
+
+    
+
+    prune_backups $level
+    rotate_backups $level
+    prune_backups $level
+    make_backup $level
 }
 
 
@@ -82,11 +332,6 @@ if [[ ! -f ${CONFIG} ]]; then
 fi
 source ${CONFIG}
 
-if (( "$#" != 1 )); then
-    # TODO: For some reason this only prints the first argument
-    critical "Bad arguments: $@"
-    usage
-    exit 1
-fi
+
 
 main "$@"
