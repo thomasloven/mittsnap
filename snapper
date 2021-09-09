@@ -8,6 +8,10 @@ VERBOSITY=3
 DRYRUN=1
 CONFIG="./config.sh"
 
+
+##################################################################
+# Log output
+##################################################################
 exec 3>&2
 exec 4>&2
 readonly silent_lvl=0
@@ -17,32 +21,37 @@ readonly wrn_lvl=3
 readonly inf_lvl=4
 readonly dbg_lvl=5
 
+clr() {
+    if [[ ! -t 3 ]]; then
+        return 0
+    fi
+    case $1 in
+        "none") echo -e "\033[0m" ;;
+        "red") echo -e "\033[0;31m" ;;
+        "green") echo -e "\033[0;32m" ;;
+        "orange") echo -e "\033[0;33m" ;;
+        "yellow") echo -e "\033[1;33m" ;;
+        "blue") echo -e "\033[1;34m" ;;
+        "purple") echo -e "\033[0;35m" ;;
+        "cyan") echo -e "\033[0;36m" ;;
+        "gray") echo -e "\033[1;30m" ;;
+    esac
+}
 notify() { log $silent_lvl "NOTE: $1"; }
-critical() { log $crt_lvl "CRITICAL: $1"; }
-error() { log $err_lvl "ERROR: $1"; }
-warn() { log $wrn_lvl "WARNING: $1"; }
-info() { log $inf_lvl "INFO: $1"; }
-debug() { log $dbg_lvl "DEBUG: $1"; }
+critical() { log $crt_lvl "$(clr red)CRITICAL: $(clr none)$1"; }
+error() { log $err_lvl "$(clr orange)ERROR: $(clr none)$1"; }
+warn() { log $wrn_lvl "$(clr yellow)WARNING: $(clr none)$1"; }
+info() { log $inf_lvl "$(clr blue)INFO: $(clr none)$1"; }
+debug() { log $dbg_lvl "$(clr gray) DEBUG: $1"; }
 log() {
     if (( $VERBOSITY >= $1 )); then
         datestring=$(date +'%Y-%m-%d %H:%M:%S')
-        echo "[$datestring] $2" | fold -w80 -s | sed '2~1s/^/  /' >&3
+        echo "[$datestring] $2 $(clr none)" | fold -w80 -s | sed '2~1s/^/  /' >&3
     fi
 }
 command_log() {
     datestring=$(date +'%Y-%m-%d %H:%M:%S')
     echo "[$datestring] $1" >&4
-}
-
-usage() {
-    echo "Usage:"
-    echo "  $0 [OPTIONS] daily|weekly|monthly"
-    echo "Options:"
-    echo "  -h      : display this help message"
-    echo "  -c FILE : read configuration from FILE"
-    echo "  -q      : decrease verbosity (can be repeated: -qq, -qqq)"
-    echo "  -v      : increase verbosity (can be repeated: -vv, -vvv)"
-    echo "  -l FILE : redirect log output to FILE"
 }
 
 runcmd() {
@@ -57,18 +66,9 @@ runcmd() {
     fi
 }
 
-get_count() {
-    local level=$1
-
-    case ${level} in
-        "daily") echo "${KEEP_DAILY-7}" ;;
-        "weekly") echo "${KEEP_WEEKLY-5}" ;;
-        "monthly") echo "${KEEP_MONTHLY-12}" ;;
-        "yearly") echo "${KEEP_YEARLY-100}" ;;
-        *) return 1 ;;
-    esac
-}
-
+##################################################################
+# Filesystem management
+##################################################################
 is_subvolume() {
     if [[ $(stat -f --format=%T ${1}) != "btrfs" ]]; then
         return 1
@@ -108,9 +108,31 @@ make_ssh_copy() {
     runcmd "${cmd}"
 }
 
+##################################################################
+# Backup management
+##################################################################
+setup_backup() {
+    local index=$1
+    local dir=${BACKUP_ROOT}/${index}
+
+    if [[ -d ${dir} ]]; then
+        critical "${dir} already exists. Aborting"
+        exit 1
+    fi
+
+    runcmd "mkdir -p ${dir}"
+    runcmd "btrfs subvolume create ${dir}/local"
+}
 copy_backup() {
-    local src=$1
-    local dst=$2
+    local src_index=$1
+    local dst_index=$2
+    local src=${BACKUP_ROOT}/${src_index}
+    local dst=${BACKUP_ROOT}/${dst_index}
+
+    if [[ ! -d ${src} ]]; then
+        debug "copy_backup: Source backup ${src_index} does not exist."
+        return 1
+    fi
 
     runcmd "mkdir -p ${dst}"
     for f in ${src}/*; do
@@ -122,6 +144,52 @@ copy_backup() {
         make_snapshot "${f}" "${target}"
     done
 }
+move_backup() {
+    local src_index=$1
+    local dst_index=$2
+    local src=${BACKUP_ROOT}/${src_index}
+    local dst=${BACKUP_ROOT}/${dst_index}
+
+    if [[ ! -d ${src} ]]; then
+        debug "move_backup: Source backup ${src_index} does not exist."
+        return 1
+    fi
+
+    runcmd "mv ${src}/ ${dst}"
+}
+remove_backup() {
+    local index=$1
+    local dir=${BACKUP_ROOT}/${index}
+
+    if [[ ! -d ${dir} ]]; then
+        debug "remove_backup: ${dir} does not exist."
+        return 1
+    fi
+
+    for f in ${dir}/*; do
+        if ! is_subvolume ${f}; then
+            critical "${f} is not a btrfs subvolume. Archive corrupted?"
+            exit 1
+        fi
+        runcmd "btrfs subvolume delete ${f}"
+    done
+    runcmd "rmdir ${dir}"
+}
+
+##################################################################
+# Manage old backups
+##################################################################
+get_count() {
+    local level=$1
+
+    case ${level} in
+        "daily") echo "${KEEP_DAILY-7}" ;;
+        "weekly") echo "${KEEP_WEEKLY-5}" ;;
+        "monthly") echo "${KEEP_MONTHLY-12}" ;;
+        "yearly") echo "${KEEP_YEARLY-100}" ;;
+        *) return 1 ;;
+    esac
+}
 rotate_backups() {
     local level=$1
 
@@ -130,43 +198,25 @@ rotate_backups() {
     info "Rotating ${level} backups"
 
     for (( i=${count}; i>= 0; i-- )); do
-        local src=${BACKUP_ROOT}/${level}.${i}
-        local dst=${BACKUP_ROOT}/${level}.$((${i}+1))
-
-        if [[ -d ${src} ]]; then
-            if ((i == 0)) && [[ $level == "daily" ]]; then
-                copy_backup ${src} ${dst}
-            else
-                runcmd "mv ${src}/ ${dst}"
-            fi
+        if ((i == 0)) && [[ $level == "daily" ]]; then
+            copy_backup "${level}.${i}" "${level}.$((${i}+1))" || continue
+        else
+            move_backup "${level}.${i}" "${level}.$((${i}+1))" || continue
         fi
     done
 }
-
 prune_backups() {
     local level=$1
     local count=$(get_count "$level")
 
-    local backup=${level}.$((${count}+1))
-    local prunedir=${BACKUP_ROOT}/${backup}
+    info "Pruning ${level} backups"
 
-    info "Pruning ${level}"
-    if [[ ! -d ${prunedir} ]]; then
-        debug "Backup ${backup} does not exist. No need to prune."
-        return 0
-    fi
-
-    debug "Pruning ${backup}"
-    for f in ${prunedir}/*; do
-        if ! is_subvolume ${f}; then
-            critical "${f} is not a btrfs subvolume. Archive corrupted?"
-            exit 1
-        fi
-        runcmd "btrfs subvolume delete ${f}"
-    done
-    runcmd "rmdir ${prunedir}"
+    remove_backup "${level}.$(($(get_count "$level")+1))" || (debug "No need to prune $level"; return 0)
 }
 
+##################################################################
+# Make new backups
+##################################################################
 make_backup_daily() {
     info "Making a new daily backup"
 
@@ -189,10 +239,10 @@ make_backup_daily() {
                 make_snapshot "${src}" "${dstdir}${dst}"
                 ;;
             "local")
-                make_local_copy ${src} ${dstdir}remote/${dst}
+                make_local_copy ${src} ${dstdir}local/${dst}
                 ;;
             "ssh")
-                make_ssh_copy ${src} ${dstdir}remote/${dst}
+                make_ssh_copy ${src} ${dstdir}local/${dst}
                 ;;
             *)
                 error "Unknown protocol: ${protocol} - ${source}"
@@ -200,35 +250,16 @@ make_backup_daily() {
         esac
     done <<< $SOURCES
 }
-
 make_backup_weekly() {
     info "Making a new weekly backup"
 
-    local dst=${BACKUP_ROOT}/weekly.0
-    local srcbackup="daily.$(get_count daily)"
-    local src=${BACKUP_ROOT}/${srcbackup}
-
-    if [[ ! -d ${src} ]]; then
-        error "Backup ${srcbackup} does not exist. Cannot make weekly backup."
-        exit 1
-    fi
-    copy_backup ${src} ${dst}
+    copy_backup "daily.$(get_count daily)" "weekly.0" || (error "Cannot create weekly backup."; exit 1)
 }
-
 make_backup_monthly() {
     info "Making a new weekly backup"
 
-    local dst=${BACKUP_ROOT}/monthly.0
-    local srcbackup="weekly.$(get_count weekly)"
-    local src=${BACKUP_ROOT}/${srcbackup}
-
-    if [[ ! -d ${src} ]]; then
-        error "Backup ${srcbackup} does not exist. Cannot make monthly backup."
-        exit 1
-    fi
-    copy_backup ${src} ${dst}
+    copy_backup "weekly.$(get_count weekly)" "monthly.0" || (error "Cannot create monthly backup."; exit 1)
 }
-
 make_backup() {
     local level=$1
 
@@ -240,33 +271,19 @@ make_backup() {
     esac
 }
 
-remove_backup() {
-    local index=$1
-    local dir=${BACKUP_ROOT}/${index}
 
-    for f in ${dir}/*; do
-        if ! is_subvolume ${f}; then
-            critical "${f} is not a btrfs subvolume. Archive corrupted?"
-            exit 1
-        fi
-        runcmd "btrfs subvolume delete ${f}"
-    done
-    runcmd "rmdir ${dir}"
+print_config() {
+    echo "Snapper v0.0.1"
+    echo "Thomas Lovén 2021"
+    echo ""
+    echo "Configuration loaded from ${CONFIG}:"
+    echo "DRYRUN=${DRYRUN}"
+    echo "BACKUP_ROOT=${BACKUP_ROOT}"
+    echo "VERBOSITY=${VERBOSITY}"
+    echo "LOGFILE=${LOGFILE}"
+    echo "RSYNC_ARGUMENTS=${RSYNC_ARGUMENTS}"
+    echo "SOURCES=${SOURCES}"
 }
-
-setup_backup() {
-    local dir=${BACKUP_ROOT}/daily.0
-
-    if [[ -d ${dir} ]]; then
-        critical "${dir} already exists. Aborting"
-        exit 1
-    fi
-
-    runcmd "mkdir -p ${dir}"
-    runcmd "btrfs subvolume create ${dir}/remote"
-}
-
-
 
 main() {
     if [[ -z ${BACKUP_ROOT-} ]]; then
@@ -278,52 +295,80 @@ main() {
         exit 1
     fi
 
-    local level=$1
+    local level=${1-}
 
-
-
-    if [[ $level == "remove" ]]; then
-        info "Removing backup ${2}"
-        remove_backup ${2}
-        exit 0
-    fi
-    if [[ $level == "setup" ]]; then
-        info "Snapper setting up in ${BACKUP_ROOT}"
-        setup_backup
-        exit 0
+    if [[ ${DRYRUN} != 0 ]]; then
+        info "Performing dry run. No file operations will be run."
     fi
 
-    if (( "$#" > 2 )); then
-    # TODO: For some reason this only prints the first argument
-    critical "Bad arguments: $@"
-    usage
-    exit 1
-fi
+    case ${level} in
+        "init")
+            info "Snapper setting up in ${BACKUP_ROOT}"
+            setup_backup daily.0
+            exit 0
+            ;;
+        "remove")
+            if [[ -z ${2-} ]]; then
+                error "Remove requires an index"
+                usage
+                exit 1
+            fi
+            remove_backup ${2}
+            ;;
+        "config")
+            print_config
+            exit 0
+            ;;
+        "daily"|"weekly"|"monthly")
+            info "Snapper starting $level snapshot"
 
-    info "Snapper starting $level snapshot"
-
-    
-
-    prune_backups $level
-    rotate_backups $level
-    prune_backups $level
-    make_backup $level
+            prune_backups $level
+            rotate_backups $level
+            prune_backups $level
+            make_backup $level
+            exit 0
+            ;;
+        *)
+            error "Unknown command $level"
+            usage
+            exit 1
+            ;;
+    esac
+   
 }
 
 
+usage() {
+    echo "Usage:"
+    echo "  $0 [<OPTIONS>] <command>"
+    echo "Options:"
+    echo "  -h      : display this help message"
+    echo "  -c FILE : read configuration from FILE"
+    echo "  -q      : decrease verbosity (can be repeated: -qq, -qqq)"
+    echo "  -v      : increase verbosity (can be repeated: -vv, -vvv)"
+    echo "  -n      : Perform a dry run"
+    echo "Commands:"
+    echo "  daily        : Perform a daily bacckup"
+    echo "  weekly       : Perform a weekly backup"
+    echo "  monthly      : Perform a monthly backup"
+    echo "  init         : Initialize backup storage. Needs to be done before first daily backup."
+    echo "  remove INDEX : Remove backup INDEX (e.g. weekly.2)"
+    echo "  config       : Print out current configuration"
+}
 
-while getopts "hqvnl:c:" opt; do
+opt_verbosity=0
+opt_dryrun=0
+
+while getopts "hqvnc:" opt; do
     case "$opt" in
         h) usage; exit 0 ;;
-        q) (( VERBOSITY = VERBOSITY - 1)) ;;
-        v) (( VERBOSITY = VERBOSITY + 1)) ;;
-        l) exec 3>>${OPTARG} ;;
-        n) (( DRYRUN = 1 )) ;;
+        q) (( opt_verbosity = opt_verbosity - 1)) ;;
+        v) (( opt_verbosity = opt_verbosity + 1)) ;;
+        n) opt_dryrun=1 ;;
         c) CONFIG=${OPTARG} ;;
         *) error "Invalid options: $1"; usage; exit 1 ;;
     esac
 done
-
 shift $((OPTIND-1))
 
 if [[ ! -f ${CONFIG} ]]; then
@@ -332,6 +377,12 @@ if [[ ! -f ${CONFIG} ]]; then
 fi
 source ${CONFIG}
 
+VERBOSITY=$((${VERBOSITY} + ${opt_verbosity}))
+DRYRUN=$((${DRYRUN} + ${opt_dryrun}))
+
+if [[ -n ${LOGFILE-} ]]; then
+    exec 4>${LOGFILE}
+fi
 
 
 main "$@"
