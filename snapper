@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+VERBOSITY=3
+DRYRUN=1
+CONFIG="./config.sh"
+
+exec 3>&2
+readonly silent_lvl=0
+readonly crt_lvl=1
+readonly err_lvl=2
+readonly wrn_lvl=3
+readonly inf_lvl=4
+readonly dbg_lvl=5
+
+notify() { log $silent_lvl "NOTE: $1"; }
+critical() { log $crt_lvl "CRITICAL: $1"; }
+error() { log $err_lvl "ERROR: $1"; }
+warn() { log $wrn_lvl "WARNING: $1"; }
+info() { log $inf_lvl "INFO: $1"; }
+debug() { log $dbg_lvl "DEBUG: $1"; }
+log() {
+    if (( $VERBOSITY >= $1 )); then
+        datestring=$(date +'%Y-%m-%d %H:%M:%S')
+        echo "[$datestring] $2" | fold -w70 -s | sed '2~1s/^/  /' >&3
+    fi
+}
+
+usage() {
+    echo "Usage:"
+    echo "  $0 [OPTIONS] daily|weekly|monthly"
+    echo "Options:"
+    echo "  -h      : display this help message"
+    echo "  -c FILE : read configuration from FILE"
+    echo "  -q      : decrease verbosity (can be repeated: -qq, -qqq)"
+    echo "  -v      : increase verbosity (can be repeated: -vv, -vvv)"
+    echo "  -l FILE : redirect log output to FILE"
+}
+
+main() {
+    if [[ -z ${SNAPSHOT_ROOT-} ]]; then
+        critical "SNAPSHOT_ROOT undefined"
+        exit 1
+    fi
+    if [[ -z ${SOURCES:-} ]]; then
+        cricitcal "SOURCES undefined"
+        exit 1
+    fi
+
+    local backuplevel=$1
+
+    info "Snapper starting $1 snapshot"
+
+    while IFS= read -r source; do
+        info "$source"
+    done <<< $SOURCES
+
+}
+
+
+
+while getopts "hqvnl:c:" opt; do
+    case "$opt" in
+        h) usage; exit 0 ;;
+        q) (( VERBOSITY = VERBOSITY - 1)) ;;
+        v) (( VERBOSITY = VERBOSITY + 1)) ;;
+        l) exec 3>>${OPTARG} ;;
+        n) (( DRYRUN = 1 )) ;;
+        c) CONFIG=${OPTARG} ;;
+        *) error "Invalid options: $1"; usage; exit 1 ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+if [[ ! -f ${CONFIG} ]]; then
+    critical "Config file not found: ${CONFIG} "
+    exit 1
+fi
+source ${CONFIG}
+
+if (( "$#" != 1 )); then
+    # TODO: For some reason this only prints the first argument
+    critical "Bad arguments: $@"
+    usage
+    exit 1
+fi
+
+main "$@"
