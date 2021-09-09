@@ -8,6 +8,7 @@ VERBOSITY=3
 DRYRUN=1
 CONFIG="/etc/snapper.conf.sh"
 LOCKFILE="/var/lock/snapper.pid"
+LOGFILE="/var/log/snapper.log"
 
 
 ##################################################################
@@ -350,6 +351,15 @@ main() {
    
 }
 
+cleanup() {
+    if [[ -f ${LOCKFILE} ]]; then
+        pid=$(cat $LOCKFILE)
+        if [[ $pid == $$ ]]; then
+            runcmd "rm ${LOCKFILE}"
+        fi
+    fi
+}
+
 
 usage() {
     echo "Usage:"
@@ -368,6 +378,9 @@ usage() {
     echo "  remove INDEX : Remove backup INDEX (e.g. weekly.2)"
     echo "  config       : Print out current configuration"
 }
+
+
+trap cleanup EXIT
 
 opt_verbosity=0
 opt_dryrun=0
@@ -411,3 +424,5 @@ fi
 runcmd "echo $$ > ${LOCKFILE}"
 
 main "$@"
+
+cleanup
