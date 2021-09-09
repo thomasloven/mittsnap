@@ -1,8 +1,8 @@
 # Dry run. Must be explicitly set to 0 to perform actual file system operations.
-DRYRUN=0
+# DRYRUN=0
 
 # Root directory of backup snapshot storage
-BACKUP_ROOT=/data/backup/snapper
+BACKUP_ROOT=/backup
 
 # Verbosity level determines how much ouput is written to stderr
 # 1: Critical errors
@@ -14,7 +14,10 @@ BACKUP_ROOT=/data/backup/snapper
 # VERBOSITY=4
 
 # All performed operations are logged to LOGFILE
-LOGFILE=./snapper.log
+# LOGFILE=/var/log/snapper.log
+
+# File used for the PID lock
+# LOCKFILE=/var/lock/snapper.pid
 
 # Numbers of each type of backup to retain
 # KEEP_DAILY=7
@@ -23,7 +26,8 @@ LOGFILE=./snapper.log
 
 # Additional arguments to RSYNC
 # RSYNC_ARGUMENTS=""
-RSYNC_ARGUMENTS="--exclude 'node_modules'"
+RSYNC_ARGUMENTS="
+"
 
 # Sources to backup from
 # A list of <protocol> <source> <target>

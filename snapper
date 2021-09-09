@@ -6,7 +6,8 @@ set -o nounset
 
 VERBOSITY=3
 DRYRUN=1
-CONFIG="./config.sh"
+CONFIG="/etc/snapper.conf.sh"
+LOCKFILE="/var/lock/snapper.pid"
 
 
 ##################################################################
@@ -396,5 +397,17 @@ if [[ -n ${LOGFILE-} ]]; then
     exec 4>${LOGFILE}
 fi
 
+if [[ -f ${LOCKFILE} ]]; then
+    pid=$(cat $LOCKFILE)
+    if ps -p ${pid} >/dev/null; then
+        critical "Lockfile found (${LOCKFILE}) and PID is still running. Aborting"
+        exit 1
+    else
+        warn "Lockfile found (${LOCKFILE}) but PID not running. Assumed stale. Removing."
+        runcmd "rm ${LOCKFILE}"
+    fi
+fi
+
+runcmd "echo $$ > ${LOCKFILE}"
 
 main "$@"
