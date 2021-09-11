@@ -14,10 +14,10 @@ BACKUP_ROOT=/backup
 # VERBOSITY=4
 
 # All performed operations are logged to LOGFILE
-# LOGFILE=/var/log/snapper.log
+# LOGFILE=/var/log/mittsnap.log
 
 # File used for the PID lock
-# LOCKFILE=/var/lock/snapper.pid
+# LOCKFILE=/var/lock/mittsnap.pid
 
 # Numbers of each type of backup to retain
 # KEEP_DAILY=7

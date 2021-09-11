@@ -6,9 +6,9 @@ set -o nounset
 
 VERBOSITY=3
 DRYRUN=1
-CONFIG="/etc/snapper.conf.sh"
-LOCKFILE="/var/lock/snapper.pid"
-LOGFILE="/var/log/snapper.log"
+CONFIG="/etc/mittsnap.conf.sh"
+LOCKFILE="/var/lock/mittsnap.pid"
+LOGFILE="/var/log/mittsnap.log"
 
 
 ##################################################################
@@ -293,7 +293,7 @@ make_backup() {
 
 
 print_config() {
-    echo "Snapper v0.0.1"
+    echo "Mittsnap v0.0.1"
     echo "Thomas Lovén 2021"
     echo ""
     echo "Configuration loaded from ${CONFIG}:"
@@ -323,7 +323,7 @@ main() {
 
     case ${level} in
         "init")
-            info "Snapper setting up in ${BACKUP_ROOT}"
+            info "Mittsnap setting up in ${BACKUP_ROOT}"
             setup_backup daily.0
             exit 0
             ;;
@@ -340,7 +340,7 @@ main() {
             exit 0
             ;;
         "daily"|"weekly"|"monthly")
-            info "Snapper starting $level snapshot"
+            info "Mittsnap starting $level snapshot"
 
             prune_backups $level
             rotate_backups $level

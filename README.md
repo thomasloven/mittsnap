@@ -1,4 +1,4 @@
-# Snapper
+# Mittsnap
 
 Rsnapshot-inspired backup management tool which leverages btrfs snapshots.
 
@@ -21,16 +21,16 @@ I have not tested this as much as I should have.
 
 ## Installation
 
-- copy `snapper` to somewhere `root` can run it from, e.g. `/usr/local/bin/
-- copy `snapper.conf.sh` to `/etc/snapper.conf.sh`
+- copy `mittsnap` to somewhere `root` can run it from, e.g. `/usr/local/bin/
+- copy `mittsnap.conf.sh` to `/etc/mittsnap.conf.sh`
 - create a directory `/backup` for the backups
 
 ## How it works
-Snapper works with a rotating backup scheme. A new daily backup is started with `snapper daily`. By default 7 daily backups are retained, and any beyond that are removed.
+Mittsnap works with a rotating backup scheme. A new daily backup is started with `mittsnap daily`. By default 7 daily backups are retained, and any beyond that are removed.
 
-When running `snapper weekly`, the oldest daily backup is copied to a weekly backup (only if 7 daily backups exist). By default 4 weekly backups are retained.
+When running `mittsnap weekly`, the oldest daily backup is copied to a weekly backup (only if 7 daily backups exist). By default 4 weekly backups are retained.
 
-When running `snapper monthly` the oldest weekly backup is copied to a monthly backup. By default 120 monthly backups are retained.
+When running `mittsnap monthly` the oldest weekly backup is copied to a monthly backup. By default 120 monthly backups are retained.
 
 A new daily backup is created like this:
 - Backups of btrfs subvolumes are snapshotted into `daily.0/`.
@@ -39,7 +39,7 @@ A new daily backup is created like this:
 It's only ever `daily.0/local` that can be written to (and is by rsync). All other backups are read-only snapshots of copy-on-write subvolumes, so everything is lightning fast.
 
 ## Configuration
-Configuration is made through `/etc/snapper.conf.sh`. A different configuration script can be used with `snapper -c FILE`.
+Configuration is made through `/etc/mittsnap.conf.sh`. A different configuration script can be used with `mittsnap -c FILE`.
 
 The variables are explained in the file, but there are two changes you need to make.
 The first one is `SOURCES` which should be a list of sources to backup from in the format:
@@ -73,19 +73,19 @@ The second change you need to make is to uncomment the line
 ```bash
 DRYRUN=0
 ```
-Otherwise snapper won't *actually* do anything.
+Otherwise Mittsnap won't *actually* do anything.
 
-Before doing this, I recommend actually making a config check with `snapper config` and a test run with `snapper -vvv daily` to see what it will do.
+Before doing this, I recommend actually making a config check with `mittsnap config` and a test run with `mittsnap -vvv daily` to see what it will do.
 
-Try `snapper -h` for more usage options.
+Try `mittsnap -h` for more usage options.
 
 ## Automating
 
 Example crontab:
 ```cron
-0 0     * * *   root /usr/local/bin/snapper daily
-2 0     * * 1   root /usr/local/bin/snapper weekly
-4 0     1 * *   root /usr/local/bin/snapper monthly
+0 0     * * *   root /usr/local/bin/mittsnap daily
+2 0     * * 1   root /usr/local/bin/mittsnap weekly
+4 0     1 * *   root /usr/local/bin/mittsnap monthly
 ```
 
 ---
